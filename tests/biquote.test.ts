@@ -216,7 +216,7 @@ async function runTests() {
 
   const allQuotes = await connectedProvider.fetchDailyQuotes();
   assertEqual(allQuotes.length, 15, 'Test 11: All 15 required quotes retrieved from REST');
-  assertEqual(connectedProvider.getStatus().health, 'CONNECTED', 'Test 11: Provider health is CONNECTED when 15/15 are fresh');
+  assertEqual(connectedProvider.getStatus().health, 'DEGRADED', 'Test 11: Provider health is DEGRADED when quotes are fresh but live stream is disconnected');
 
   // Test 12: Provider DISCONNECTED state
   const disconnectedProvider = new BiquoteProvider();
@@ -387,6 +387,185 @@ async function runTests() {
 
   assertEqual(eurContrib?.signedContribution, 1.00, 'Test 21: EUR receives +1.00% signed contribution from rising EUR/USD');
   assertEqual(usdContrib?.signedContribution, -1.00, 'Test 21: USD receives -1.00% signed contribution from rising EUR/USD');
+
+  // Test 22: Initial stream state and health
+  const initialProvider = new BiquoteProvider();
+  assertEqual(initialProvider.getStatus().streamState, 'DISCONNECTED', 'Test 22: Initial stream state is DISCONNECTED');
+  assertEqual(initialProvider.getStatus().health, 'DISCONNECTED', 'Test 22: Initial health is DISCONNECTED');
+
+  // Helper mock WebSocket class
+  class MockWs {
+    public onopen: (() => void) | null = null;
+    public onmessage: ((e: any) => void) | null = null;
+    public onerror: ((e: any) => void) | null = null;
+    public onclose: (() => void) | null = null;
+    public sent: string[] = [];
+    public send(msg: string) { this.sent.push(msg); }
+    public close() { this.onclose?.(); }
+  }
+
+  let activeMockWs: MockWs | null = null;
+  const mockNegotiateFetch = async (url: any) => {
+    const urlStr = String(url);
+    if (urlStr.includes('/negotiate')) {
+      return {
+        ok: true,
+        json: async () => ({ connectionToken: 'mock-token-abc' })
+      } as any;
+    }
+    if (urlStr.includes('/api/latest')) {
+      return mockFetchAll();
+    }
+    return { ok: false } as any;
+  };
+
+  const lifecycleProvider = new BiquoteProvider({
+    fetchFn: mockNegotiateFetch,
+    webSocketFactory: () => {
+      activeMockWs = new MockWs();
+      return activeMockWs;
+    },
+    requiredPairs: required15
+  });
+
+  // Test 23: onopen keeps stream in CONNECTING state
+  const streamPromise = lifecycleProvider.startLiveStream();
+  await new Promise(r => setTimeout(r, 10)); // Allow negotiate promise to resolve
+  assert(activeMockWs !== null, 'Test 23: WebSocket instance created');
+  activeMockWs!.onopen?.();
+  assertEqual(lifecycleProvider.getStatus().streamState, 'CONNECTING', 'Test 23: onopen keeps streamState as CONNECTING');
+  assert(activeMockWs!.sent.some(m => m.includes('protocol')), 'Test 23: SignalR protocol handshake sent on onopen');
+
+  // Test 24: SignalR handshake changes streamState to CONNECTED
+  activeMockWs!.onmessage?.({ data: '{}\x1e' });
+  assertEqual(lifecycleProvider.getStatus().streamState, 'CONNECTED', 'Test 24: SignalR handshake confirmation ({}) changes streamState to CONNECTED');
+
+  // Test 25: Subscription message with all 15 pairs sent after handshake
+  const subscribeMessage = activeMockWs!.sent.find(m => m.includes('Subscribe'));
+  assert(subscribeMessage !== undefined, 'Test 25: Subscription message was sent');
+  for (const sym of required15) {
+    const bqSym = toBiquoteSymbol(sym)!;
+    assert(subscribeMessage!.includes(bqSym), `Test 25: Subscription includes ${bqSym}`);
+  }
+
+  // Test 26: Fresh quotes + connected stream = health CONNECTED
+  await lifecycleProvider.fetchDailyQuotes();
+  assertEqual(lifecycleProvider.getStatus().health, 'CONNECTED', 'Test 26: Fresh quotes + connected stream = health CONNECTED');
+  assert(lifecycleProvider.getStatus().message.includes('15/15 pairs fresh'), 'Test 26: Status message reports 15/15 pairs fresh');
+
+  // Test 27: Fresh quotes + disconnected stream = health DEGRADED
+  const currentWs = activeMockWs!;
+  currentWs.onclose?.();
+  assertEqual(lifecycleProvider.getStatus().streamState, 'DISCONNECTED', 'Test 27: Stream state is DISCONNECTED on close');
+  assertEqual(lifecycleProvider.getStatus().health, 'DEGRADED', 'Test 27: Fresh quotes + disconnected stream = health DEGRADED (never CONNECTED)');
+  assert(lifecycleProvider.getStatus().message.includes('disconnected; REST market data remains available'), 'Test 27: Status message indicates REST remains available');
+
+  // Test 28: onerror followed by onclose schedules only ONE reconnect timer
+  const preAttempts = (lifecycleProvider as any).reconnectAttempts;
+  // Trigger duplicate disconnect events on the already closed socket
+  currentWs.onerror?.(new Error('duplicate error'));
+  currentWs.onclose?.();
+  const postAttempts = (lifecycleProvider as any).reconnectAttempts;
+  assertEqual(postAttempts, preAttempts, 'Test 28: Duplicate onerror/onclose on same socket ignored without extra reconnects');
+
+  // Test 29: Stale WebSocket callbacks cannot mutate newer connection state
+  const staleWs = currentWs;
+  // Start new connection attempt
+  await lifecycleProvider.startLiveStream();
+  await new Promise(r => setTimeout(r, 10));
+  const newWs = activeMockWs!;
+  assert(newWs !== staleWs, 'Test 29: A new WebSocket instance was created for the new generation');
+  newWs.onopen?.();
+  newWs.onmessage?.({ data: '{}\x1e' });
+  assertEqual(lifecycleProvider.getStatus().streamState, 'CONNECTED', 'Test 29: New stream is CONNECTED');
+
+  // Fire events on old stale socket
+  staleWs.onmessage?.({ data: '{"type":1,"target":"ReceiveTick","arguments":[]}\x1e' });
+  staleWs.onerror?.(new Error('old socket dead'));
+  staleWs.onclose?.();
+  assertEqual(lifecycleProvider.getStatus().streamState, 'CONNECTED', 'Test 29: Stale socket close/error does NOT disconnect newer connection');
+
+  // Test 30: Successful reconnect resets reconnect attempts to 0
+  assertEqual((lifecycleProvider as any).reconnectAttempts, 0, 'Test 30: Successful handshake resets reconnect attempts to 0');
+
+  // Test 31: REST recovery during stream outage keeps stream DISCONNECTED and health DEGRADED
+  newWs.onclose?.();
+  assertEqual(lifecycleProvider.getStatus().streamState, 'DISCONNECTED', 'Test 31: Stream state DISCONNECTED');
+  // Trigger REST snapshot during disconnect
+  await lifecycleProvider.fetchDailyQuotes();
+  assertEqual(lifecycleProvider.getStatus().streamState, 'DISCONNECTED', 'Test 31: REST fetch does NOT mark stream CONNECTED');
+  assertEqual(lifecycleProvider.getStatus().health, 'DEGRADED', 'Test 31: Provider health remains DEGRADED');
+
+  // Test 32: Valid ReceiveTick updates quotes
+  // Re-connect stream
+  await lifecycleProvider.startLiveStream();
+  await new Promise(r => setTimeout(r, 10));
+  activeMockWs!.onopen?.();
+  activeMockWs!.onmessage?.({ data: '{}\x1e' });
+  const tickRawMsg: BiquoteRawQuote = {
+    symbol: 'EURUSD',
+    bid: 1.1390,
+    ask: 1.1392,
+    mid: 1.1391,
+    dayDiffPercent: 0.35,
+    timestamp: new Date().toISOString()
+  };
+  const tickMsg = JSON.stringify({
+    type: 1,
+    target: 'ReceiveTick',
+    arguments: [tickRawMsg]
+  }) + '\x1e';
+  activeMockWs!.onmessage?.({ data: tickMsg });
+  const eurUsdQuote = lifecycleProvider.getQuotes().find(q => q.symbol === 'EUR/USD');
+  assertEqual(eurUsdQuote?.price, 1.1391, 'Test 32: Valid ReceiveTick updated EUR/USD price');
+  assertEqual(eurUsdQuote?.changePercent, 0.35, 'Test 32: Valid ReceiveTick updated change percent');
+
+  // Test 33: Stale quotes produce DEGRADED even when stream is connected
+  const staleProvider = new BiquoteProvider({
+    freshnessThresholdSeconds: 5,
+    fetchFn: mockNegotiateFetch,
+    webSocketFactory: () => new MockWs(),
+    requiredPairs: ['EUR/USD']
+  });
+  await staleProvider.startLiveStream();
+  await new Promise(r => setTimeout(r, 10));
+  // Inject quote with 10s age (older than 5s threshold)
+  const oldTimestamp = new Date(Date.now() - 10000).toISOString();
+  (staleProvider as any).lastQuotes.set('EUR/USD', {
+    symbol: 'EUR/USD',
+    baseCurrency: 'EUR',
+    quoteCurrency: 'USD',
+    price: 1.12,
+    open: 1.12,
+    high: 1.12,
+    low: 1.12,
+    close: 1.12,
+    change: 0,
+    changePercent: 0,
+    timestamp: Date.now() - 10000,
+    interval: 'live',
+    source: 'Biquote',
+    sourceStatus: 'CONNECTED',
+    providerTimestamp: oldTimestamp,
+    receivedAt: oldTimestamp,
+    quoteAgeSeconds: 10,
+    stale: true,
+    marketState: 'open'
+  });
+  staleProvider.getStatus(); // triggers evaluateStatus
+  assertEqual(staleProvider.getStatus().health, 'DEGRADED', 'Test 33: Stale quotes produce DEGRADED health even when stream is connected');
+
+  // Test 34: Stop live stream marks stream OFFLINE and clears reconnect timers
+  lifecycleProvider.stopLiveStream();
+  assertEqual(lifecycleProvider.getStatus().streamState, 'OFFLINE', 'Test 34: stopLiveStream marks streamState as OFFLINE');
+  assertEqual((lifecycleProvider as any).reconnectTimer, null, 'Test 34: stopLiveStream clears reconnectTimer');
+
+  // Test 35: All 15 required pairs remain supported and mapped
+  assertEqual(required15.length, 15, 'Test 35: All 15 liquid FX pairs required');
+  for (const pair of required15) {
+    const bq = toBiquoteSymbol(pair);
+    assert(bq !== null && bq.length === 6, `Test 35: Pair ${pair} mapped to ${bq}`);
+  }
 
   console.log('\n================================================================');
   console.log(`ALL BIQUOTE TESTS COMPLETED: ${passed}/${passed + failed} PASSED`);

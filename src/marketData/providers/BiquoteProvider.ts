@@ -107,7 +107,7 @@ export class BiquoteProvider implements MarketDataProvider {
   public readonly name = 'Biquote';
 
   private health: ProviderHealthState = 'DISCONNECTED';
-  private message: string = 'Biquote provider initialized. Ready to connect.';
+  private message: string = 'Biquote live stream disconnected and no usable market data is available.';
   private lastFetchedAt: string | null = null;
   private lastSuccessfulUpdate: string | null = null;
   private lastQuotes: Map<string, NormalizedMarketQuote> = new Map();
@@ -121,9 +121,11 @@ export class BiquoteProvider implements MarketDataProvider {
   private readonly wsFactory: (url: string) => any;
   private readonly onTickCallback?: (quote: NormalizedMarketQuote) => void;
 
-  private ws: any = null;
+  private activeWs: any = null;
+  private connectionGeneration: number = 0;
   private isExplicitlyClosed: boolean = false;
-  private reconnectTimer: any = null;
+  private isReconnecting: boolean = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts: number = 0;
   private streamState: 'CONNECTED' | 'DISCONNECTED' | 'CONNECTING' | 'OFFLINE' = 'DISCONNECTED';
 
@@ -135,6 +137,8 @@ export class BiquoteProvider implements MarketDataProvider {
     this.fetchFn = options.fetchFn ?? ((...args) => globalThis.fetch(...args));
     this.wsFactory = options.webSocketFactory ?? ((url: string) => new (globalThis as any).WebSocket(url));
     this.onTickCallback = options.onTick;
+
+    this.evaluateStatus();
 
     if (options.autoStartStream) {
       this.startLiveStream().catch(err => {
@@ -164,8 +168,6 @@ export class BiquoteProvider implements MarketDataProvider {
    * Fetches latest quotes for required FX pairs via Biquote REST API.
    */
   public async fetchDailyQuotes(symbols: string[] = [...this.requiredPairs]): Promise<NormalizedMarketQuote[]> {
-    this.health = this.lastQuotes.size > 0 ? this.health : 'CONNECTING';
-
     try {
       const url = this.buildBatchUrl(symbols);
       const response = await this.fetchFn(url, {
@@ -208,14 +210,17 @@ export class BiquoteProvider implements MarketDataProvider {
       this.lastFetchedAt = new Date(now).toISOString();
       this.lastSuccessfulUpdate = this.lastFetchedAt;
 
-      // Evaluate coverage and freshness
+      // Evaluate coverage and freshness with stream-state awareness
       this.evaluateStatus(symbols);
 
       return Array.from(this.lastQuotes.values());
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      this.health = this.lastQuotes.size > 0 ? 'DEGRADED' : 'ERROR';
-      this.message = `Failed to fetch REST snapshot from Biquote: ${errMsg}`;
+      this.evaluateStatus(symbols);
+      if (this.lastQuotes.size === 0) {
+        this.health = 'ERROR';
+        this.message = `Failed to fetch REST snapshot from Biquote: ${errMsg}`;
+      }
       return Array.from(this.lastQuotes.values());
     }
   }
@@ -299,12 +304,29 @@ export class BiquoteProvider implements MarketDataProvider {
    * Starts the live SignalR WebSocket streaming connection.
    */
   public async startLiveStream(): Promise<void> {
-    if (this.streamState === 'CONNECTED' || this.streamState === 'CONNECTING') {
-      return;
+    if (this.isExplicitlyClosed) return;
+    if (this.streamState === 'CONNECTED') return;
+    if (this.streamState === 'CONNECTING' && this.activeWs) return;
+
+    this.streamState = 'CONNECTING';
+    this.connectionGeneration++;
+    const currentGeneration = this.connectionGeneration;
+
+    // Safely tear down any preexisting socket instance
+    if (this.activeWs) {
+      try {
+        this.activeWs.onopen = null;
+        this.activeWs.onmessage = null;
+        this.activeWs.onerror = null;
+        this.activeWs.onclose = null;
+        this.activeWs.close();
+      } catch {
+        // ignore
+      }
+      this.activeWs = null;
     }
 
-    this.isExplicitlyClosed = false;
-    this.streamState = 'CONNECTING';
+    this.evaluateStatus();
 
     try {
       // 1. Negotiate with SignalR Hub
@@ -313,6 +335,8 @@ export class BiquoteProvider implements MarketDataProvider {
         method: 'POST',
         headers: { 'Accept': 'application/json' }
       });
+
+      if (this.connectionGeneration !== currentGeneration || this.isExplicitlyClosed) return;
 
       if (!negResponse.ok) {
         throw new Error(`SignalR negotiate failed with HTTP ${negResponse.status}`);
@@ -324,27 +348,41 @@ export class BiquoteProvider implements MarketDataProvider {
         throw new Error('SignalR negotiate returned no connection token');
       }
 
+      if (this.connectionGeneration !== currentGeneration || this.isExplicitlyClosed) return;
+
       // Convert HTTP URL to WebSocket URL
       const wsBase = this.baseUrl.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
       const wsUrl = `${wsBase}/hubs/tick?id=${encodeURIComponent(token)}`;
 
-      this.ws = this.wsFactory(wsUrl);
+      const ws = this.wsFactory(wsUrl);
+      this.activeWs = ws;
+      let disconnectHandled = false;
 
-      this.ws.onopen = () => {
+      ws.onopen = () => {
+        if (this.connectionGeneration !== currentGeneration || this.activeWs !== ws) return;
+        // WebSocket opened, but keep streamState as CONNECTING until SignalR handshake confirmed
         this.streamState = 'CONNECTING';
-        // Send SignalR protocol handshake
-        this.ws.send(JSON.stringify({ protocol: 'json', version: 1 }) + '\x1e');
+        this.evaluateStatus();
+        ws.send(JSON.stringify({ protocol: 'json', version: 1 }) + '\x1e');
       };
 
-      this.ws.onmessage = (event: any) => {
+      ws.onmessage = (event: any) => {
+        if (this.connectionGeneration !== currentGeneration || this.activeWs !== ws) return;
         const rawData = typeof event.data === 'string' ? event.data : String(event.data);
         const messages = rawData.split('\x1e').filter(Boolean);
 
         for (const msg of messages) {
           if (msg === '{}') {
-            // Handshake confirmed -> subscribe to required symbols
+            // Handshake confirmed by SignalR hub
+            // Transition streamState to CONNECTED only after handshake
             this.streamState = 'CONNECTED';
             this.reconnectAttempts = 0;
+            this.isReconnecting = false;
+            if (this.reconnectTimer) {
+              clearTimeout(this.reconnectTimer);
+              this.reconnectTimer = null;
+            }
+
             const biquoteSymbols = this.requiredPairs
               .map(toBiquoteSymbol)
               .filter((s): s is string => s !== null);
@@ -354,7 +392,9 @@ export class BiquoteProvider implements MarketDataProvider {
               target: 'Subscribe',
               arguments: [biquoteSymbols]
             }) + '\x1e';
-            this.ws.send(subscribeMsg);
+            ws.send(subscribeMsg);
+
+            this.evaluateStatus();
           } else {
             try {
               const parsed = JSON.parse(msg);
@@ -368,8 +408,12 @@ export class BiquoteProvider implements MarketDataProvider {
                   this.onTickCallback?.(normalized);
                 }
               } else if (parsed.type === 6) {
-                // SignalR keep-alive ping
-                this.ws.send('{"type":6}\x1e');
+                // SignalR keep-alive ping response
+                try {
+                  ws.send('{"type":6}\x1e');
+                } catch {
+                  // ignore
+                }
               }
             } catch {
               // Ignore unparseable frames
@@ -378,43 +422,72 @@ export class BiquoteProvider implements MarketDataProvider {
         }
       };
 
-      this.ws.onerror = (_err: any) => {
-        if (!this.isExplicitlyClosed) {
-          this.handleStreamDisconnect('WebSocket error encountered');
-        }
+      const onDisconnect = (reason: string) => {
+        if (this.connectionGeneration !== currentGeneration || this.activeWs !== ws) return;
+        if (disconnectHandled) return;
+        disconnectHandled = true;
+        this.handleStreamDisconnect(reason, currentGeneration);
       };
 
-      this.ws.onclose = () => {
-        if (!this.isExplicitlyClosed) {
-          this.handleStreamDisconnect('WebSocket connection closed');
-        }
+      ws.onerror = (_err: any) => {
+        onDisconnect('WebSocket error encountered');
+      };
+
+      ws.onclose = () => {
+        onDisconnect('WebSocket connection closed');
       };
 
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      this.handleStreamDisconnect(errMsg);
+      if (this.connectionGeneration === currentGeneration) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        this.handleStreamDisconnect(errMsg, currentGeneration);
+      }
     }
   }
 
   /**
-   * Handles stream disconnect with controlled exponential backoff reconnect
+   * Handles stream disconnect idempotently with controlled exponential backoff reconnect
    * and fallback REST snapshot recovery.
    */
-  private handleStreamDisconnect(reason: string): void {
-    this.streamState = 'DISCONNECTED';
-    this.health = this.lastQuotes.size > 0 ? 'DEGRADED' : 'DISCONNECTED';
-    this.message = `Live stream disconnected (${reason}). Triggering REST recovery.`;
-
+  private handleStreamDisconnect(reason: string, generation: number): void {
     if (this.isExplicitlyClosed) return;
+    if (generation !== this.connectionGeneration) return;
 
-    // Trigger REST recovery snapshot so data remains updated during reconnect
+    if (this.activeWs) {
+      try {
+        this.activeWs.onopen = null;
+        this.activeWs.onmessage = null;
+        this.activeWs.onerror = null;
+        this.activeWs.onclose = null;
+        this.activeWs.close();
+      } catch {
+        // ignore
+      }
+      this.activeWs = null;
+    }
+
+    this.streamState = 'DISCONNECTED';
+    this.isReconnecting = true;
+
+    // Immediately evaluate status to transition truthfully to DEGRADED or DISCONNECTED
+    this.evaluateStatus();
+
+    // Trigger non-blocking REST recovery snapshot so market data remains available during outage
     this.fetchDailyQuotes().catch(() => {});
 
-    // Schedule reconnect with exponential backoff (2s, 4s, 8s... max 30s)
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    const delay = Math.min(30000, 2000 * Math.pow(1.5, this.reconnectAttempts++));
+    // Ensure only ONE pending reconnect timer
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    // Exponential backoff: 2s -> 3s -> 4.5s -> ... max 30s
+    const delay = Math.min(30000, Math.round(2000 * Math.pow(1.5, this.reconnectAttempts++)));
     this.reconnectTimer = setTimeout(() => {
-      this.startLiveStream().catch(() => {});
+      this.reconnectTimer = null;
+      if (!this.isExplicitlyClosed) {
+        this.startLiveStream().catch(() => {});
+      }
     }, delay);
   }
 
@@ -423,25 +496,31 @@ export class BiquoteProvider implements MarketDataProvider {
    */
   public stopLiveStream(): void {
     this.isExplicitlyClosed = true;
+    this.connectionGeneration++;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.ws) {
+    if (this.activeWs) {
       try {
-        this.ws.close();
+        this.activeWs.onopen = null;
+        this.activeWs.onmessage = null;
+        this.activeWs.onerror = null;
+        this.activeWs.onclose = null;
+        this.activeWs.close();
       } catch {
         // ignore
       }
-      this.ws = null;
+      this.activeWs = null;
     }
     this.streamState = 'OFFLINE';
-    this.health = 'DISCONNECTED';
-    this.message = 'Live stream stopped.';
+    this.isReconnecting = false;
+    this.evaluateStatus();
   }
 
   /**
    * Evaluates freshness and overall health across the required pairs.
+   * Considers BOTH quote freshness/coverage AND stream state.
    */
   private evaluateStatus(symbols: readonly string[] = this.requiredPairs): void {
     const now = Date.now();
@@ -468,16 +547,45 @@ export class BiquoteProvider implements MarketDataProvider {
     }
 
     this.missingPairs = missing;
+    const totalQuotes = this.lastQuotes.size;
+    const allFreshAndComplete = freshCount === symbols.length && missing.length === 0 && stale.length === 0;
 
-    if (freshCount === symbols.length && missing.length === 0) {
+    // A) CONNECTED:
+    // SignalR/WebSocket stream is actually connected/handshaken/subscribed.
+    // Required market quotes are fresh enough for the configured freshness threshold.
+    // There is no active reconnect condition.
+    if (this.streamState === 'CONNECTED' && allFreshAndComplete && !this.isReconnecting) {
       this.health = 'CONNECTED';
-      this.message = `Biquote connected. All ${symbols.length}/${symbols.length} pairs live and fresh.`;
-    } else if (freshCount > 0 || this.lastQuotes.size > 0) {
+      this.message = `Biquote live stream connected. All ${symbols.length}/${symbols.length} pairs fresh.`;
+    }
+    // B) DEGRADED:
+    // REST data is available and reasonably fresh, but the live stream is disconnected/reconnecting.
+    // Or only partial quote coverage is currently fresh.
+    else if (freshCount > 0 || totalQuotes > 0) {
       this.health = 'DEGRADED';
-      this.message = `Biquote degraded: ${freshCount}/${symbols.length} fresh, ${stale.length} stale, ${missing.length} missing.`;
-    } else if (this.health === 'DISCONNECTED' || this.health === 'CONNECTING') {
-      // Maintain initial DISCONNECTED or CONNECTING state before first observation
-    } else {
+      if (this.streamState === 'CONNECTED') {
+        this.message = `Biquote degraded: ${freshCount}/${symbols.length} fresh, ${stale.length} stale, ${missing.length} missing.`;
+      } else if (this.isReconnecting || this.streamState === 'CONNECTING') {
+        this.message = `Biquote live stream disconnected; REST market data remains available (${freshCount}/${symbols.length} fresh). Reconnecting.`;
+      } else {
+        this.message = `Biquote live stream disconnected; REST market data remains available (${freshCount}/${symbols.length} fresh).`;
+      }
+    }
+    // C) CONNECTING:
+    // Initial stream connection or reconnect is actively being established and no usable quotes yet.
+    else if (this.streamState === 'CONNECTING') {
+      this.health = 'CONNECTING';
+      this.message = 'Connecting to Biquote live stream...';
+    }
+    // D) DISCONNECTED:
+    // No usable market data is available and the live stream is not connected.
+    else if (this.streamState === 'DISCONNECTED' || this.streamState === 'OFFLINE') {
+      this.health = 'DISCONNECTED';
+      this.message = 'Biquote live stream disconnected and no usable market data is available.';
+    }
+    // E) ERROR:
+    // A provider error prevents obtaining usable market data.
+    else {
       this.health = 'ERROR';
       this.message = 'Biquote error: No valid market quotes available.';
     }
