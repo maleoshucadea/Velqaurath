@@ -44,7 +44,7 @@ export const MarketStateSummary: React.FC<MarketStateSummaryProps> = ({
             MARKET DATA UNAVAILABLE / NOT CONFIGURED
           </h3>
           <p className="text-[11px] text-neutral-400 max-w-md mx-auto mt-1 leading-relaxed">
-            Market strength calculations require real FX quotes from Twelve Data. Set <code className="text-neutral-300 font-mono bg-neutral-800 px-1 py-0.5 rounded">TWELVE_DATA_API_KEY</code> on the server to activate live market strength. Macroeconomic fundamental conditions and central bank stances remain active below.
+            Market strength calculations require real live FX quotes from active providers (Biquote primary, Twelve Data secondary fallback). Macroeconomic fundamental conditions and central bank stances remain active below.
           </p>
         </div>
       ) : (

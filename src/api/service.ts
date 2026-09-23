@@ -178,9 +178,9 @@ export class VelqoarathApiService {
     let dataStatus: DataSourceStatus = state.isDataFeedConnected ? 'CONNECTED' : 'NOT_CONNECTED';
     let dataStatusMessage = state.isDataFeedConnected
       ? providerStatus.health === 'CONNECTED'
-        ? 'LIVE DATA FEEDS CONNECTED: Twelve Data market quotes & official macroeconomic statistics active.'
+        ? `LIVE DATA FEEDS CONNECTED: ${providerStatus.activeProvider || providerStatus.providerName} market quotes & official macroeconomic statistics active.`
         : providerStatus.health === 'NOT_CONFIGURED'
-        ? 'MACRO FEEDS CONNECTED · MARKET DATA NOT CONFIGURED: Set TWELVE_DATA_API_KEY to populate live FX market strength.'
+        ? 'MACRO FEEDS CONNECTED · MARKET DATA NOT CONFIGURED: Awaiting live market data feed.'
         : `MACRO FEEDS CONNECTED · MARKET DATA: ${providerStatus.message}`
       : 'DATA SOURCE NOT CONNECTED: Running in unaugmented intelligence mode. Connect verified feeds to populate.';
 

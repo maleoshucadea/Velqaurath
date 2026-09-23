@@ -60,16 +60,23 @@ class DataStore {
       marketQuotes: [],
       marketStrengths: new Map(),
       marketProviderStatus: {
-        providerName: 'Twelve Data',
-        health: 'NOT_CONFIGURED',
-        message: 'Twelve Data API key is not configured (TWELVE_DATA_API_KEY missing on server). Market data unavailable.',
+        providerName: 'Biquote',
+        activeProvider: 'Biquote',
+        health: 'DISCONNECTED',
+        message: 'Biquote live market data provider initialized. Awaiting initial connection.',
         lastFetchedAt: null,
         quotesCount: 0,
         requiredPairsCount: DEFAULT_LIQUID_PAIRS.length,
         availablePairsCount: 0,
         missingPairs: [...DEFAULT_LIQUID_PAIRS],
+        stalePairs: [],
+        oldestQuoteAge: null,
+        streamState: 'DISCONNECTED',
         cacheExpiresAt: null,
-        isConfigured: false
+        isConfigured: true,
+        source: 'Biquote',
+        fallbackAvailable: false,
+        fallbackStatus: 'NOT_CONFIGURED'
       }
     };
   }

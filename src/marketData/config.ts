@@ -52,6 +52,19 @@ export const DEFAULT_CACHE_TTL_MS = 10 * 60 * 1000;
 export const HEALTH_CACHE_TTL_MS = 60 * 1000;
 
 /**
+ * Default freshness threshold for live market quotes (30 seconds).
+ * Quotes older than this threshold are marked stale and excluded from live calculation.
+ */
+export const DEFAULT_FRESHNESS_THRESHOLD_SECONDS = 30;
+
+/**
+ * Biquote Public Endpoints
+ * No API key required. Anonymous rate limit: 15,000 req/min.
+ */
+export const BIQUOTE_API_BASE_URL = 'https://biquote.io';
+export const BIQUOTE_WS_HUB_URL = 'wss://biquote.io/hubs/tick';
+
+/**
  * Scaling factor (lambda) for mapping demeaned daily percentage return into
  * the [-0.30, +0.30] classification score space.
  * 

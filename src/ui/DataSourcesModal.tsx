@@ -99,21 +99,34 @@ export const DataSourcesModal: React.FC<DataSourcesModalProps> = ({
 
             <div className="space-y-1.5 font-mono text-[11px] text-neutral-300">
               <div className="flex justify-between">
-                <span className="text-neutral-500">Provider:</span>
-                <span className="text-neutral-200">Twelve Data (Forex REST API)</span>
+                <span className="text-neutral-500">Active Provider:</span>
+                <span className="text-emerald-400 font-bold">{marketProviderStatus?.activeProvider ?? marketProviderStatus?.providerName ?? 'Biquote'}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-neutral-500">Server Key:</span>
-                <span className={marketProviderStatus?.isConfigured ? 'text-emerald-400' : 'text-amber-400'}>
-                  {marketProviderStatus?.isConfigured ? 'Configured (Server-Side Env)' : 'Missing (TWELVE_DATA_API_KEY not set)'}
-                </span>
+                <span className="text-neutral-500">Primary Feed:</span>
+                <span className="text-neutral-200">Biquote (Public REST & SignalR Tick Hub)</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-neutral-500">Secondary Fallback:</span>
+                <span className="text-neutral-400">Twelve Data ({marketProviderStatus?.fallbackAvailable ? 'Available' : 'Not Configured'})</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-neutral-500">Pairs Observed:</span>
                 <span>
                   {marketProviderStatus?.availablePairsCount ?? 0} / {marketProviderStatus?.requiredPairsCount ?? 15} liquid pairs
+                  {marketProviderStatus?.stalePairs && marketProviderStatus.stalePairs.length > 0 && (
+                    <span className="text-amber-400 ml-1">({marketProviderStatus.stalePairs.length} stale)</span>
+                  )}
                 </span>
               </div>
+              {marketProviderStatus?.oldestQuoteAge !== null && marketProviderStatus?.oldestQuoteAge !== undefined && (
+                <div className="flex justify-between">
+                  <span className="text-neutral-500">Oldest Quote Age:</span>
+                  <span className={marketProviderStatus.oldestQuoteAge <= 30 ? 'text-emerald-400' : 'text-amber-400'}>
+                    {marketProviderStatus.oldestQuoteAge}s
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-neutral-500">Provider Message:</span>
                 <span className="text-neutral-400 text-right max-w-xs line-clamp-1">

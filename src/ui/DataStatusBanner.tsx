@@ -70,8 +70,11 @@ export const DataStatusBanner: React.FC<DataStatusBannerProps> = ({
                 }`}
               >
                 <Activity className="w-3 h-3" />
-                Twelve Data: {marketHealth === 'NOT_CONFIGURED' ? 'NOT CONFIGURED' : marketHealth}
-                {marketProviderStatus && marketProviderStatus.quotesCount > 0 && ` (${marketProviderStatus.quotesCount} pairs)`}
+                {marketProviderStatus?.activeProvider || marketProviderStatus?.providerName || 'Market Data'}: {marketHealth === 'NOT_CONFIGURED' ? 'NOT CONFIGURED' : marketHealth}
+                {marketProviderStatus && marketProviderStatus.quotesCount > 0 && ` (${marketProviderStatus.availablePairsCount}/${marketProviderStatus.requiredPairsCount || 15} pairs)`}
+                {marketProviderStatus?.stalePairs && marketProviderStatus.stalePairs.length > 0 && (
+                  <span className="text-amber-400 font-bold">[{marketProviderStatus.stalePairs.length} STALE]</span>
+                )}
               </span>
             </div>
             <p className="text-[11px] text-neutral-400 mt-1 leading-snug">

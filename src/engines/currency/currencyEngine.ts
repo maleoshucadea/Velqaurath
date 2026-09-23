@@ -81,7 +81,7 @@ export function evaluateCurrencyState(
       momentum: null,
       timeframe: 'D1 / Awaiting Feed',
       explanation: unavailMsg,
-      source: marketStrengthResult?.source ?? 'Twelve Data',
+      source: marketStrengthResult?.source ?? 'Market Data',
       coverage: marketStrengthResult?.coverage
     };
 
@@ -104,7 +104,7 @@ export function evaluateCurrencyState(
     };
   }
 
-  // Real calculated market strength from Twelve Data basket
+  // Real calculated market strength from active provider basket
   const rawMarketStrength = marketStrengthResult.marketStrength as number;
   const marketState: RelativeStrengthClassification = marketStrengthResult.classification;
   const momentum = marketStrengthResult.momentum;
@@ -114,7 +114,7 @@ export function evaluateCurrencyState(
     classification: marketState,
     thresholds,
     momentum,
-    timeframe: 'D1 Basket (Twelve Data)',
+    timeframe: `Live Basket (${marketStrengthResult.source})`,
     explanation: marketStrengthResult.explanation,
     source: marketStrengthResult.source,
     coverage: marketStrengthResult.coverage,

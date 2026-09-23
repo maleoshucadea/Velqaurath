@@ -43,6 +43,28 @@ export class MarketDataCache {
     };
   }
 
+  public upsertQuote(quote: NormalizedMarketQuote, ttlMs?: number): void {
+    const duration = ttlMs ?? this.defaultTtlMs;
+    const now = Date.now();
+    if (!this.quotesCache) {
+      this.quotesCache = {
+        data: [quote],
+        timestamp: now,
+        expiresAt: now + duration
+      };
+      return;
+    }
+
+    const idx = this.quotesCache.data.findIndex(q => q.symbol === quote.symbol);
+    if (idx >= 0) {
+      this.quotesCache.data[idx] = quote;
+    } else {
+      this.quotesCache.data.push(quote);
+    }
+    this.quotesCache.timestamp = now;
+    this.quotesCache.expiresAt = now + duration;
+  }
+
   public isExpired(): boolean {
     if (!this.quotesCache) return true;
     return Date.now() > this.quotesCache.expiresAt;

@@ -116,7 +116,16 @@ export class TwelveDataProvider implements MarketDataProvider {
       });
 
       if (!response.ok) {
-        throw new Error(`Twelve Data HTTP error ${response.status}: ${response.statusText}`);
+        let errorDetail = response.statusText;
+        try {
+          const errBody = await response.json() as Record<string, unknown>;
+          if (errBody && typeof errBody.message === 'string') {
+            errorDetail = errBody.message;
+          }
+        } catch {
+          // Keep response.statusText if body is not JSON
+        }
+        throw new Error(`Twelve Data HTTP error ${response.status}: ${errorDetail}`);
       }
 
       const json = await response.json() as TwelveDataBatchResponse;

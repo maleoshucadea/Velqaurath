@@ -32,7 +32,7 @@ export function evaluatePairIntelligence(
 
     const isMarketMissing = baseState.marketStrength === null || quoteState.marketStrength === null;
     const orientationExplanation = isMarketMissing
-      ? `MARKET DATA UNAVAILABLE: Live market strength feed is missing for ${baseState.marketStrength === null ? pair.baseCurrency : ''}${baseState.marketStrength === null && quoteState.marketStrength === null ? ' and ' : ''}${quoteState.marketStrength === null ? pair.quoteCurrency : ''}. Connect Twelve Data provider to calculate relative orientation.`
+      ? `MARKET DATA UNAVAILABLE: Live market strength feed is missing for ${baseState.marketStrength === null ? pair.baseCurrency : ''}${baseState.marketStrength === null && quoteState.marketStrength === null ? ' and ' : ''}${quoteState.marketStrength === null ? pair.quoteCurrency : ''}. Connect market data feed to calculate relative orientation.`
       : 'DATA SOURCE NOT CONNECTED: Pair relative orientation cannot be calculated without authenticated inputs.';
 
     return {

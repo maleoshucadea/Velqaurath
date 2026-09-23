@@ -10,7 +10,7 @@ export type ProviderHealthState =
 
 /**
  * Normalized internal representation of an FX market observation.
- * Decoupled from Twelve Data or any external vendor response schema.
+ * Decoupled from Twelve Data, Biquote, or any external vendor response schema.
  */
 export interface NormalizedMarketQuote {
   symbol: string;             // e.g. "EUR/USD"
@@ -24,10 +24,20 @@ export interface NormalizedMarketQuote {
   change: number | null;
   changePercent: number | null; // e.g. +0.35 meaning +0.35%
   timestamp: number | null;   // Milliseconds epoch
-  interval: string;           // "1day"
-  source: string;             // "Twelve Data"
+  interval: string;           // "1day" or "live"
+  source: string;             // "Biquote" | "Twelve Data"
   sourceStatus: ProviderHealthState;
   fetchedAt: string;          // ISO string
+  // Real-time freshness & market state fields
+  bid?: number | null;
+  ask?: number | null;
+  mid?: number | null;
+  spread?: number | null;
+  providerTimestamp?: string | null; // Original provider timestamp string
+  receivedAt?: string;               // ISO string when received locally
+  quoteAgeSeconds?: number;          // Age in seconds relative to current time
+  stale?: boolean;                   // true if quoteAgeSeconds > freshnessThreshold
+  marketState?: string;              // "open" | "closed"
 }
 
 /**
@@ -68,15 +78,23 @@ export interface CurrencyMarketStrength {
  */
 export interface MarketProviderStatus {
   providerName: string;
+  activeProvider?: string;
   health: ProviderHealthState;
   message: string;
   lastFetchedAt: string | null;
+  lastSuccessfulUpdate?: string | null;
   quotesCount: number;
   requiredPairsCount: number;
   availablePairsCount: number;
   missingPairs: string[];
+  stalePairs?: string[];
+  oldestQuoteAge?: number | null;
+  streamState?: 'CONNECTED' | 'DISCONNECTED' | 'CONNECTING' | 'OFFLINE';
   cacheExpiresAt: string | null;
   isConfigured: boolean;
+  source?: string;
+  fallbackAvailable?: boolean;
+  fallbackStatus?: ProviderHealthState;
 }
 
 /**
@@ -93,12 +111,15 @@ export interface MarketCoverageReport {
 
 /**
  * Generic Market Data Provider abstraction.
- * Allows swappable adapters (Twelve Data, etc.) without altering the intelligence engines.
+ * Allows swappable adapters (Biquote, Twelve Data, etc.) without altering the intelligence engines.
  */
 export interface MarketDataProvider {
   readonly name: string;
   getStatus(): MarketProviderStatus;
-  fetchDailyQuotes(symbols: string[]): Promise<NormalizedMarketQuote[]>;
+  fetchDailyQuotes(symbols?: string[]): Promise<NormalizedMarketQuote[]>;
+  getQuotes?(): NormalizedMarketQuote[];
+  startLiveStream?(): Promise<void>;
+  stopLiveStream?(): void;
 }
 
 /**

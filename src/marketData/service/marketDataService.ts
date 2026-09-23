@@ -5,6 +5,7 @@ import {
   CurrencyMarketStrength,
   MarketCoverageReport
 } from '../types';
+import { BiquoteProvider } from '../providers/BiquoteProvider';
 import { TwelveDataProvider } from '../providers/TwelveDataProvider';
 import { MarketDataCache } from '../cache/MarketDataCache';
 import { calculateCurrencyMarketStrengths } from '../engine/marketStrengthEngine';
@@ -17,7 +18,9 @@ import { RelativeStrengthConfig } from '../../types';
 
 export class MarketDataService {
   private static instance: MarketDataService | null = null;
-  private provider: MarketDataProvider;
+  private primaryProvider: MarketDataProvider;
+  private secondaryProvider: MarketDataProvider | null = null;
+  private activeProvider: MarketDataProvider;
   private cache: MarketDataCache;
   private requiredPairs: readonly string[];
   private currencies: readonly string[];
@@ -25,12 +28,21 @@ export class MarketDataService {
   private inFlightPromise: Promise<NormalizedMarketQuote[]> | null = null;
 
   constructor(
-    provider?: MarketDataProvider,
+    primaryProvider?: MarketDataProvider,
+    secondaryProvider?: MarketDataProvider,
     cacheTtlMs: number = DEFAULT_CACHE_TTL_MS,
     requiredPairs: readonly string[] = DEFAULT_LIQUID_PAIRS,
     currencies: readonly string[] = SUPPORTED_MAJOR_CURRENCIES
   ) {
-    this.provider = provider ?? new TwelveDataProvider({ requiredPairs });
+    this.primaryProvider = primaryProvider ?? new BiquoteProvider({
+      requiredPairs,
+      onTick: (quote) => {
+        this.cache.upsertQuote(quote);
+      }
+    });
+
+    this.secondaryProvider = secondaryProvider ?? new TwelveDataProvider({ requiredPairs });
+    this.activeProvider = this.primaryProvider;
     this.cache = new MarketDataCache(cacheTtlMs);
     this.requiredPairs = requiredPairs;
     this.currencies = currencies;
@@ -44,22 +56,52 @@ export class MarketDataService {
   }
 
   public setProvider(provider: MarketDataProvider): void {
-    this.provider = provider;
+    this.primaryProvider = provider;
+    this.activeProvider = provider;
     this.cache.clear();
     this.latestStrengths.clear();
   }
 
+  public setSecondaryProvider(provider: MarketDataProvider | null): void {
+    this.secondaryProvider = provider;
+  }
+
   public getProvider(): MarketDataProvider {
-    return this.provider;
+    return this.activeProvider;
+  }
+
+  public getPrimaryProvider(): MarketDataProvider {
+    return this.primaryProvider;
+  }
+
+  public getSecondaryProvider(): MarketDataProvider | null {
+    return this.secondaryProvider;
+  }
+
+  public async startLiveStream(): Promise<void> {
+    if (this.primaryProvider.startLiveStream) {
+      await this.primaryProvider.startLiveStream();
+    }
+  }
+
+  public stopLiveStream(): void {
+    if (this.primaryProvider.stopLiveStream) {
+      this.primaryProvider.stopLiveStream();
+    }
   }
 
   public getStatus(): MarketProviderStatus {
-    const providerStatus = this.provider.getStatus();
+    const activeStatus = this.activeProvider.getStatus();
     const cacheInfo = this.cache.getCacheInfo();
+    const secondaryStatus = this.secondaryProvider?.getStatus();
 
     return {
-      ...providerStatus,
-      cacheExpiresAt: cacheInfo.expiresAt
+      ...activeStatus,
+      activeProvider: this.activeProvider.name,
+      source: this.activeProvider.name,
+      cacheExpiresAt: cacheInfo.expiresAt,
+      fallbackAvailable: secondaryStatus?.isConfigured ?? false,
+      fallbackStatus: secondaryStatus?.health
     };
   }
 
@@ -78,11 +120,51 @@ export class MarketDataService {
 
     this.inFlightPromise = (async () => {
       try {
-        const quotes = await this.provider.fetchDailyQuotes([...this.requiredPairs]);
-        if (quotes.length > 0) {
-          this.cache.setQuotes(quotes);
+        // Step 1: Attempt Primary Provider (Biquote)
+        let primaryQuotes: NormalizedMarketQuote[] = [];
+        try {
+          primaryQuotes = await this.primaryProvider.fetchDailyQuotes([...this.requiredPairs]);
+        } catch {
+          primaryQuotes = [];
         }
-        return quotes;
+
+        const primaryStatus = this.primaryProvider.getStatus();
+        const freshPrimaryQuotes = primaryQuotes.filter(q => !q.stale && q.changePercent !== null);
+
+        // If primary provider returned valid quotes with active/degraded state
+        if (
+          primaryQuotes.length > 0 &&
+          (primaryStatus.health === 'CONNECTED' || (primaryStatus.health === 'DEGRADED' && freshPrimaryQuotes.length > 0))
+        ) {
+          this.activeProvider = this.primaryProvider;
+          this.cache.setQuotes(primaryQuotes);
+          return primaryQuotes;
+        }
+
+        // Step 2: Fallback to Secondary Provider (Twelve Data) if primary failed or returned 0 quotes
+        if (this.secondaryProvider) {
+          try {
+            const secondaryQuotes = await this.secondaryProvider.fetchDailyQuotes([...this.requiredPairs]);
+            const secondaryStatus = this.secondaryProvider.getStatus();
+
+            if (secondaryQuotes.length > 0 && secondaryStatus.health !== 'ERROR') {
+              this.activeProvider = this.secondaryProvider;
+              this.cache.setQuotes(secondaryQuotes);
+              return secondaryQuotes;
+            }
+          } catch {
+            // Secondary fallback failed
+          }
+        }
+
+        // Step 3: Neither succeeded with fresh data
+        this.activeProvider = this.primaryProvider;
+        if (primaryQuotes.length > 0) {
+          this.cache.setQuotes(primaryQuotes);
+          return primaryQuotes;
+        }
+
+        return [];
       } finally {
         this.inFlightPromise = null;
       }
@@ -96,13 +178,13 @@ export class MarketDataService {
     forceRefresh = false
   ): Promise<Map<string, CurrencyMarketStrength>> {
     const quotes = await this.getQuotes(forceRefresh);
-    const providerStatus = this.provider.getStatus();
+    const providerStatus = this.getStatus();
 
     const strengths = calculateCurrencyMarketStrengths(quotes, thresholds, {
       currencies: this.currencies,
       requiredPairs: this.requiredPairs,
       providerStatus: providerStatus.health,
-      providerSource: providerStatus.providerName
+      providerSource: providerStatus.activeProvider || providerStatus.providerName
     });
 
     this.latestStrengths = strengths;
@@ -113,15 +195,14 @@ export class MarketDataService {
     thresholds: RelativeStrengthConfig = { strongThreshold: 0.10, weakThreshold: -0.10 }
   ): Map<string, CurrencyMarketStrength> {
     const cachedQuotes = this.cache.getQuotes();
-    const providerStatus = this.provider.getStatus();
+    const providerStatus = this.getStatus();
 
     if (!cachedQuotes || cachedQuotes.length === 0) {
-      // Re-calculate or return explicit unavailable
       return calculateCurrencyMarketStrengths([], thresholds, {
         currencies: this.currencies,
         requiredPairs: this.requiredPairs,
         providerStatus: providerStatus.health,
-        providerSource: providerStatus.providerName
+        providerSource: providerStatus.activeProvider || providerStatus.providerName
       });
     }
 
@@ -129,7 +210,7 @@ export class MarketDataService {
       currencies: this.currencies,
       requiredPairs: this.requiredPairs,
       providerStatus: providerStatus.health,
-      providerSource: providerStatus.providerName
+      providerSource: providerStatus.activeProvider || providerStatus.providerName
     });
   }
 
@@ -142,7 +223,7 @@ export class MarketDataService {
   }
 
   public getCoverage(): MarketCoverageReport {
-    const status = this.provider.getStatus();
+    const status = this.getStatus();
     const cachedQuotes = this.cache.getQuotesEvenIfExpired() ?? [];
     const availableQuotesMap = new Map(cachedQuotes.map(q => [q.symbol, q]));
 

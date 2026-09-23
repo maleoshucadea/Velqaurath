@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { VelqoarathApiService } from './src/api/service.js';
+import { marketDataService } from './src/marketData/service/marketDataService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -153,9 +154,13 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[VELQOARATH] Market Intelligence Server listening on port ${PORT}`);
     // Non-blocking initialization of market data provider
-    VelqoarathApiService.syncMarketData().catch(err => {
-      console.warn('[VELQOARATH] Initial market data sync deferred:', err?.message || err);
-    });
+    VelqoarathApiService.syncMarketData()
+      .then(() => {
+        return marketDataService.startLiveStream();
+      })
+      .catch(err => {
+        console.warn('[VELQOARATH] Initial market data sync deferred:', err?.message || err);
+      });
   });
 }
 

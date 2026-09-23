@@ -92,11 +92,21 @@ export const INITIAL_DATA_SOURCES: DataSource[] = [
     reliabilityGrade: 'OFFICIAL_PRIMARY'
   },
   {
+    id: 'src-biquote',
+    name: 'Biquote Live FX Feed (Primary)',
+    institution: 'Biquote Market Infrastructure (REST & SignalR)',
+    url: 'https://biquote.io',
+    coverage: ['Liquid Major FX Cross Basket (15 Pairs)', 'Real-Time Bid/Ask/Mid Ticks', 'Currency Relative Strength Matrix'],
+    status: 'CONNECTED',
+    lastSyncAt: null,
+    reliabilityGrade: 'OFFICIAL_PRIMARY'
+  },
+  {
     id: 'src-twelvedata',
-    name: 'Twelve Data FX Feed',
+    name: 'Twelve Data FX Feed (Secondary / Fallback)',
     institution: 'Twelve Data Financial APIs',
     url: 'https://twelvedata.com',
-    coverage: ['Liquid Major FX Cross Basket', 'D1 OHLC Observations', 'Currency Relative Strength Matrix'],
+    coverage: ['Liquid Major FX Cross Basket', 'D1 OHLC Observations', 'Fallback Market Strength'],
     status: 'DATA_UNAVAILABLE',
     lastSyncAt: null,
     reliabilityGrade: 'OFFICIAL_PRIMARY'
