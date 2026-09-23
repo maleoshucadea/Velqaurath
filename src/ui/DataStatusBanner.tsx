@@ -1,11 +1,13 @@
 import React from 'react';
 import { DataSourceStatus, DataSource } from '../types';
-import { CheckCircle2, AlertTriangle, ShieldCheck, Database, RefreshCw, Power } from 'lucide-react';
+import { MarketProviderStatus } from '../marketData/types';
+import { CheckCircle2, AlertTriangle, ShieldCheck, Database, Power, Activity } from 'lucide-react';
 
 interface DataStatusBannerProps {
   dataStatus: DataSourceStatus;
   statusMessage: string;
   dataSources: DataSource[];
+  marketProviderStatus?: MarketProviderStatus;
   onToggleConnection: () => void;
   onOpenSources: () => void;
 }
@@ -14,11 +16,17 @@ export const DataStatusBanner: React.FC<DataStatusBannerProps> = ({
   dataStatus,
   statusMessage,
   dataSources,
+  marketProviderStatus,
   onToggleConnection,
   onOpenSources
 }) => {
   const isConnected = dataStatus === 'CONNECTED';
-  const connectedCount = dataSources.filter(s => s.status === 'CONNECTED').length;
+  const macroSources = dataSources.filter(s => s.id !== 'src-twelvedata');
+  const connectedMacroCount = macroSources.filter(s => s.status === 'CONNECTED').length;
+
+  const marketHealth = marketProviderStatus?.health ?? 'NOT_CONFIGURED';
+  const isMarketConnected = marketHealth === 'CONNECTED';
+  const isMarketConfigured = marketProviderStatus?.isConfigured ?? false;
 
   return (
     <div
@@ -37,19 +45,36 @@ export const DataStatusBanner: React.FC<DataStatusBannerProps> = ({
           )}
 
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span
                 className={`font-mono text-[11px] font-bold tracking-wider uppercase ${
                   isConnected ? 'text-emerald-400' : 'text-rose-400'
                 }`}
               >
-                {isConnected ? 'DATA FEED ACTIVE' : 'DATA SOURCE NOT CONNECTED'}
+                {isConnected ? 'MACRO FEEDS ACTIVE' : 'MACRO FEEDS DISCONNECTED'}
               </span>
               <span className="text-neutral-500 text-[10px] font-mono">
-                · {connectedCount}/{dataSources.length} Primary Statistical Agencies
+                · {connectedMacroCount}/{macroSources.length} Primary Statistical Agencies
+              </span>
+
+              {/* Market Data Provider Status Badge */}
+              <span
+                className={`text-[10px] font-mono px-2 py-0.5 rounded border flex items-center gap-1 ${
+                  isMarketConnected
+                    ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
+                    : marketHealth === 'DEGRADED'
+                    ? 'bg-amber-950/40 border-amber-500/30 text-amber-300'
+                    : marketHealth === 'ERROR'
+                    ? 'bg-rose-950/40 border-rose-500/30 text-rose-300'
+                    : 'bg-neutral-800/80 border-neutral-700 text-neutral-400'
+                }`}
+              >
+                <Activity className="w-3 h-3" />
+                Twelve Data: {marketHealth === 'NOT_CONFIGURED' ? 'NOT CONFIGURED' : marketHealth}
+                {marketProviderStatus && marketProviderStatus.quotesCount > 0 && ` (${marketProviderStatus.quotesCount} pairs)`}
               </span>
             </div>
-            <p className="text-[11px] text-neutral-400 mt-0.5 leading-snug">
+            <p className="text-[11px] text-neutral-400 mt-1 leading-snug">
               {statusMessage}
             </p>
           </div>

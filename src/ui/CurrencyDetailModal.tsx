@@ -89,6 +89,25 @@ export const CurrencyDetailModal: React.FC<CurrencyDetailModalProps> = ({
               <span>Timeframe: {relativeStrengthBreakdown.timeframe}</span>
               <span>Momentum: {relativeStrengthBreakdown.momentum !== null ? `${relativeStrengthBreakdown.momentum >= 0 ? '+' : ''}${relativeStrengthBreakdown.momentum.toFixed(2)}` : '—'}</span>
             </div>
+
+            {/* Contributing FX Pairs & Provenance */}
+            {relativeStrengthBreakdown.contributors && relativeStrengthBreakdown.contributors.length > 0 && (
+              <div className="mt-2.5 pt-2 border-t border-neutral-800/80">
+                <span className="text-[10px] font-mono text-neutral-500 uppercase tracking-wider block mb-1.5">
+                  Observed FX Pair Contributions ({relativeStrengthBreakdown.coverage ? `${relativeStrengthBreakdown.coverage.available}/${relativeStrengthBreakdown.coverage.required} pairs · ${relativeStrengthBreakdown.coverage.percent}% coverage` : `${relativeStrengthBreakdown.contributors.length} pairs`})
+                </span>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 font-mono text-[11px]">
+                  {relativeStrengthBreakdown.contributors.map(c => (
+                    <div key={c.pairSymbol} className="p-1.5 bg-neutral-950/60 rounded border border-neutral-800 flex justify-between items-center">
+                      <span className="text-neutral-400 text-[10px]">{c.pairSymbol} ({c.role})</span>
+                      <span className={`text-[10px] font-semibold tabular-nums ${c.signedContribution > 0 ? 'text-emerald-400' : c.signedContribution < 0 ? 'text-rose-400' : 'text-neutral-400'}`}>
+                        {c.signedContribution > 0 ? '+' : ''}{c.signedContribution.toFixed(2)}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
 
           {/* 3. Fundamental State & Explicit Formula */}

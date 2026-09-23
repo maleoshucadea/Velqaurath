@@ -90,5 +90,15 @@ export const INITIAL_DATA_SOURCES: DataSource[] = [
     status: 'CONNECTED',
     lastSyncAt: '2026-09-17T22:45:00Z',
     reliabilityGrade: 'OFFICIAL_PRIMARY'
+  },
+  {
+    id: 'src-twelvedata',
+    name: 'Twelve Data FX Feed',
+    institution: 'Twelve Data Financial APIs',
+    url: 'https://twelvedata.com',
+    coverage: ['Liquid Major FX Cross Basket', 'D1 OHLC Observations', 'Currency Relative Strength Matrix'],
+    status: 'DATA_UNAVAILABLE',
+    lastSyncAt: null,
+    reliabilityGrade: 'OFFICIAL_PRIMARY'
   }
 ];

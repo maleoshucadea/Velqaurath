@@ -12,12 +12,16 @@ interface MarketStateSummaryProps {
 }
 
 export const MarketStateSummary: React.FC<MarketStateSummaryProps> = ({
+  allCurrencies,
   strongCurrencies,
   neutralCurrencies,
   weakCurrencies,
   thresholds,
   onSelectCurrency
 }) => {
+  const isMarketDataUnavailable =
+    allCurrencies.length > 0 && allCurrencies.every(c => c.marketState === 'DATA_UNAVAILABLE');
+
   return (
     <section className="bg-neutral-900/60 border border-neutral-800 rounded-lg p-4">
       <div className="flex items-center justify-between pb-3 border-b border-neutral-800/80 mb-3">
@@ -31,7 +35,20 @@ export const MarketStateSummary: React.FC<MarketStateSummaryProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      {isMarketDataUnavailable ? (
+        <div className="p-5 bg-neutral-950/80 border border-neutral-800/90 rounded text-center">
+          <div className="inline-flex items-center justify-center p-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-400 mb-2">
+            <Info className="w-4 h-4" />
+          </div>
+          <h3 className="font-mono text-xs font-bold text-neutral-200 uppercase tracking-wider">
+            MARKET DATA UNAVAILABLE / NOT CONFIGURED
+          </h3>
+          <p className="text-[11px] text-neutral-400 max-w-md mx-auto mt-1 leading-relaxed">
+            Market strength calculations require real FX quotes from Twelve Data. Set <code className="text-neutral-300 font-mono bg-neutral-800 px-1 py-0.5 rounded">TWELVE_DATA_API_KEY</code> on the server to activate live market strength. Macroeconomic fundamental conditions and central bank stances remain active below.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {/* STRONGEST CURRENCIES */}
         <div className="p-3 bg-neutral-950/70 border border-neutral-800/90 rounded flex flex-col justify-between">
           <div>
@@ -179,6 +196,7 @@ export const MarketStateSummary: React.FC<MarketStateSummaryProps> = ({
           </p>
         </div>
       </div>
+      )}
     </section>
   );
 };

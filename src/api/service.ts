@@ -4,6 +4,7 @@ import { evaluatePairIntelligence } from '../engines/pair/pairEngine';
 import { getPairSessionRelevance, calculateWatchWindow } from '../engines/session/sessionEngine';
 import { getActiveSessionOverview, getSessionInstantStatus, MARKET_SESSIONS } from '../data/sessions';
 import { ECONOMIC_INDICATORS } from '../data/indicators';
+import { marketDataService } from '../marketData/service/marketDataService';
 import {
   Currency,
   CurrencyPair,
@@ -12,10 +13,16 @@ import {
   DashboardPayload,
   DataSourceStatus
 } from '../types';
+import {
+  NormalizedMarketQuote,
+  CurrencyMarketStrength,
+  MarketProviderStatus,
+  MarketCoverageReport
+} from '../marketData/types';
 
 /**
- * High-performance, typed Service Layer implementing all Part 13 API capabilities.
- * Usable both within server-side Express routes and client React SPA.
+ * High-performance, typed Service Layer implementing all API capabilities.
+ * Operates seamlessly across server-side Express routes and client UI.
  */
 export class VelqoarathApiService {
   public static getCurrencies(): Currency[] {
@@ -52,12 +59,20 @@ export class VelqoarathApiService {
       }
     };
 
+    // Retrieve market strength from store cache or marketDataService
+    const marketStrengths = state.marketStrengths.size > 0
+      ? state.marketStrengths
+      : marketDataService.getCachedCurrencyStrengths(state.thresholds);
+
+    const marketStrengthResult = marketStrengths.get(currency.code.toUpperCase()) ?? null;
+
     return evaluateCurrencyState(
       currency,
       state.observations,
       cb,
       state.thresholds,
-      state.isDataFeedConnected
+      state.isDataFeedConnected,
+      marketStrengthResult
     );
   }
 
@@ -158,28 +173,38 @@ export class VelqoarathApiService {
   public static getDashboard(date = new Date()): DashboardPayload {
     const state = globalStore.getState();
     const allStates = this.getAllCurrencyStates();
+    const providerStatus = marketDataService.getStatus();
 
     let dataStatus: DataSourceStatus = state.isDataFeedConnected ? 'CONNECTED' : 'NOT_CONNECTED';
     let dataStatusMessage = state.isDataFeedConnected
-      ? 'LIVE DATA FEED CONNECTED: Official primary statistics active.'
+      ? providerStatus.health === 'CONNECTED'
+        ? 'LIVE DATA FEEDS CONNECTED: Twelve Data market quotes & official macroeconomic statistics active.'
+        : providerStatus.health === 'NOT_CONFIGURED'
+        ? 'MACRO FEEDS CONNECTED · MARKET DATA NOT CONFIGURED: Set TWELVE_DATA_API_KEY to populate live FX market strength.'
+        : `MACRO FEEDS CONNECTED · MARKET DATA: ${providerStatus.message}`
       : 'DATA SOURCE NOT CONNECTED: Running in unaugmented intelligence mode. Connect verified feeds to populate.';
 
     const strongCurrencies = allStates.filter(s => s.marketState === 'STRONG');
     const neutralCurrencies = allStates.filter(s => s.marketState === 'NEUTRAL');
     const weakCurrencies = allStates.filter(s => s.marketState === 'WEAK');
 
-    // Find top pair to watch: highest absolute relative strength delta with active convergence or high catalyst sensitivity
+    // Find top pair to watch based on real market strength delta
     const allIntelligences = this.getAllPairIntelligences(date);
     let topPairToWatch: PairIntelligence | null = null;
 
     if (allIntelligences.length > 0 && state.isDataFeedConnected) {
-      // Sort by absolute delta
-      const sorted = [...allIntelligences].sort((a, b) => {
-        const deltaA = Math.abs(a.relativeStrengthDelta ?? 0);
-        const deltaB = Math.abs(b.relativeStrengthDelta ?? 0);
-        return deltaB - deltaA;
-      });
-      topPairToWatch = sorted[0];
+      const validPairsWithDelta = allIntelligences.filter(
+        p => p.relativeStrengthDelta !== null && p.orientationDirection !== 'DATA_UNAVAILABLE'
+      );
+
+      if (validPairsWithDelta.length > 0) {
+        const sorted = [...validPairsWithDelta].sort((a, b) => {
+          const deltaA = Math.abs(a.relativeStrengthDelta ?? 0);
+          const deltaB = Math.abs(b.relativeStrengthDelta ?? 0);
+          return deltaB - deltaA;
+        });
+        topPairToWatch = sorted[0];
+      }
     }
 
     const sessionOverview = getActiveSessionOverview(date);
@@ -201,7 +226,8 @@ export class VelqoarathApiService {
         currentTimeUtc: date.toISOString()
       },
       economicCalendar: state.events,
-      dataSources: state.dataSources
+      dataSources: state.dataSources,
+      marketProviderStatus: providerStatus
     };
   }
 
@@ -218,6 +244,43 @@ export class VelqoarathApiService {
     return {
       success: true,
       thresholds: globalStore.getState().thresholds
+    };
+  }
+
+  // --- Real Market Data Provider Methods ---
+
+  public static getMarketDataStatus(): MarketProviderStatus {
+    return marketDataService.getStatus();
+  }
+
+  public static async getMarketQuotes(forceRefresh = false): Promise<NormalizedMarketQuote[]> {
+    return marketDataService.getQuotes(forceRefresh);
+  }
+
+  public static async getMarketStrengths(forceRefresh = false): Promise<CurrencyMarketStrength[]> {
+    const state = globalStore.getState();
+    const map = await marketDataService.getCurrencyStrengths(state.thresholds, forceRefresh);
+    return Array.from(map.values());
+  }
+
+  public static getMarketCoverage(): MarketCoverageReport {
+    return marketDataService.getCoverage();
+  }
+
+  public static async syncMarketData(forceRefresh = false): Promise<{
+    status: MarketProviderStatus;
+    quotesCount: number;
+  }> {
+    const state = globalStore.getState();
+    const quotes = await marketDataService.getQuotes(forceRefresh);
+    const strengths = await marketDataService.getCurrencyStrengths(state.thresholds, forceRefresh);
+    const status = marketDataService.getStatus();
+
+    globalStore.setMarketData(quotes, strengths, status);
+
+    return {
+      status,
+      quotesCount: quotes.length
     };
   }
 }

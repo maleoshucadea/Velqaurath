@@ -5,31 +5,39 @@ import {
   CentralBank,
   RelativeStrengthConfig,
   RelativeStrengthClassification,
-  RelativeStrengthBreakdown,
-  DataSourceStatus
+  RelativeStrengthBreakdown
 } from '../../types';
+import { CurrencyMarketStrength } from '../../marketData/types';
 import { evaluateCurrencyFundamentals } from '../fundamentals/fundamentalEngine';
 
 /**
  * Currency Intelligence Engine
- * Computes relative strength, incorporates user's configurable +/- 0.10 threshold framework,
- * and fuses fundamental confirmation, central bank stance, and market evidence.
+ * Computes overall currency state by synthesizing:
+ * 1. Real provider-calculated market strength (Twelve Data D1 / liquid cross basket)
+ * 2. Multi-pillar macroeconomic fundamental evaluations
+ * 3. Central bank stance and policy rate differentials
+ * 4. User's configurable +/- 0.10 threshold framework
+ * 
+ * CORE PRINCIPLE: Never fabricates market strength when data source is disconnected or missing.
  */
 export function evaluateCurrencyState(
   currency: Currency,
   observations: EconomicObservation[],
   centralBank: CentralBank,
   thresholds: RelativeStrengthConfig,
-  isDataFeedConnected: boolean
+  isDataFeedConnected: boolean,
+  marketStrengthResult?: CurrencyMarketStrength | null
 ): CurrencyState {
+  // If data feed is toggled off or market strength is unavailable
   if (!isDataFeedConnected) {
     const unavailBreakdown: RelativeStrengthBreakdown = {
       marketStrength: null,
       classification: 'DATA_UNAVAILABLE',
       thresholds,
       momentum: null,
-      timeframe: 'Daily / Multi-timeframe',
-      explanation: 'DATA SOURCE NOT CONNECTED: Market strength feeds and economic observations are disconnected.'
+      timeframe: 'D1 / Market Feed Disconnected',
+      explanation: 'DATA SOURCE NOT CONNECTED: Market strength feeds and economic observations are disconnected.',
+      source: 'Twelve Data'
     };
 
     const emptyFundamentals = evaluateCurrencyFundamentals(currency.code, observations, centralBank, false);
@@ -57,58 +65,95 @@ export function evaluateCurrencyState(
   const fundamentals = evaluateCurrencyFundamentals(currency.code, observations, centralBank, true);
   const relevantObs = observations.filter(o => o.currency === currency.code && o.sourceStatus === 'CONNECTED');
 
-  // Relative strength calculation:
-  // Combines relative observable market performance + fundamental score impulse
-  // Base raw market strengths calibrated from recent performance relative to basket:
-  const baselineMarketStrengths: Record<string, number> = {
-    USD: -0.04, // Cooling inflation & softening jobs vs consensus
-    EUR: -0.12, // Manufacturing contraction & ECB rate cut cycle -> WEAK
-    GBP: 0.06,  // Positive growth & services inflation persistence -> NEUTRAL-TILT-STRONG
-    JPY: 0.18,  // Wage surge, BOJ rate hike cycle, carry unwind -> STRONG
-    CHF: -0.14, // SNB rate cuts & low domestic inflation -> WEAK
-    CAD: -0.09, // Sequential BOC cuts & mortgage headwinds -> NEUTRAL-TILT-WEAK
-    AUD: 0.15,  // Hawkish RBA pause & elevated trimmed CPI -> STRONG
-    NZD: -0.16  // Early RBNZ rate cut initiation -> WEAK
-  };
+  // Check if real market strength result was provided
+  const hasValidMarketStrength = marketStrengthResult !== undefined &&
+    marketStrengthResult !== null &&
+    marketStrengthResult.marketStrength !== null;
 
-  const rawMarketStrength = baselineMarketStrengths[currency.code] ?? 0.0;
-  
-  // Classify based on user's exact configurable thresholds
-  let marketState: RelativeStrengthClassification = 'NEUTRAL';
-  if (rawMarketStrength >= thresholds.strongThreshold) {
-    marketState = 'STRONG';
-  } else if (rawMarketStrength <= thresholds.weakThreshold) {
-    marketState = 'WEAK';
+  if (!hasValidMarketStrength) {
+    const unavailMsg = marketStrengthResult?.explanation ||
+      'MARKET DATA UNAVAILABLE: Market strength data feed not connected or provider key missing.';
+
+    const unavailBreakdown: RelativeStrengthBreakdown = {
+      marketStrength: null,
+      classification: 'DATA_UNAVAILABLE',
+      thresholds,
+      momentum: null,
+      timeframe: 'D1 / Awaiting Feed',
+      explanation: unavailMsg,
+      source: marketStrengthResult?.source ?? 'Twelve Data',
+      coverage: marketStrengthResult?.coverage
+    };
+
+    return {
+      currency,
+      marketStrength: null,
+      marketState: 'DATA_UNAVAILABLE',
+      relativeStrengthBreakdown: unavailBreakdown,
+      fundamentalState: fundamentals,
+      centralBank,
+      overallState: 'DATA_UNAVAILABLE',
+      confidenceMetadata: {
+        dataStatus: 'CONNECTED',
+        observationCount: relevantObs.length,
+        completenessPct: Math.min(100, Math.round((relevantObs.length / 5) * 100)),
+        lastVerified: new Date().toISOString()
+      },
+      supportingEvidence: centralBank.stanceEvidence.slice(0, 2),
+      conflictingEvidence: []
+    };
   }
 
-  // Momentum indication (direction of recent strength shift)
-  const momentum = Math.round((rawMarketStrength * 0.4) * 100) / 100;
-
-  // Build transparent explanation of the classification
-  const thresholdDesc = `Thresholds applied: Strong ≥ ${thresholds.strongThreshold >= 0 ? '+' : ''}${thresholds.strongThreshold.toFixed(2)}, Weak ≤ ${thresholds.weakThreshold.toFixed(2)}.`;
-  const strengthValueDesc = `Calculated relative strength score: ${rawMarketStrength >= 0 ? '+' : ''}${rawMarketStrength.toFixed(2)}.`;
-  let classificationWhy = '';
-
-  if (marketState === 'STRONG') {
-    classificationWhy = `${strengthValueDesc} Surpasses threshold (+${thresholds.strongThreshold.toFixed(2)}). Driven by supportive yield differentials and central bank policy alignment.`;
-  } else if (marketState === 'WEAK') {
-    classificationWhy = `${strengthValueDesc} Drops below weak boundary (${thresholds.weakThreshold.toFixed(2)}). Driven by disinflationary progress and monetary easing cycles.`;
-  } else {
-    classificationWhy = `${strengthValueDesc} Sits within neutral bounds (${thresholds.weakThreshold.toFixed(2)} to +${thresholds.strongThreshold.toFixed(2)}). Balanced cross-currents prevent extreme directional commitment.`;
-  }
+  // Real calculated market strength from Twelve Data basket
+  const rawMarketStrength = marketStrengthResult.marketStrength as number;
+  const marketState: RelativeStrengthClassification = marketStrengthResult.classification;
+  const momentum = marketStrengthResult.momentum;
 
   const breakdown: RelativeStrengthBreakdown = {
     marketStrength: rawMarketStrength,
     classification: marketState,
     thresholds,
     momentum,
-    timeframe: 'Daily / Structural Basket',
-    explanation: `${thresholdDesc} ${classificationWhy}`
+    timeframe: 'D1 Basket (Twelve Data)',
+    explanation: marketStrengthResult.explanation,
+    source: marketStrengthResult.source,
+    coverage: marketStrengthResult.coverage,
+    contributors: marketStrengthResult.contributors.map(c => ({
+      pairSymbol: c.pairSymbol,
+      pairReturnPercent: c.pairReturnPercent,
+      role: c.role,
+      signedContribution: c.signedContribution
+    }))
   };
 
   // Compile supporting and conflicting evidence
   const supporting: string[] = [];
   const conflicting: string[] = [];
+
+  // Market observation evidence from real contributors
+  if (marketStrengthResult.contributors.length > 0) {
+    const sorted = [...marketStrengthResult.contributors].sort(
+      (a, b) => Math.abs(b.signedContribution) - Math.abs(a.signedContribution)
+    );
+    const topPositive = sorted.filter(c => c.signedContribution > 0)[0];
+    const topNegative = sorted.filter(c => c.signedContribution < 0)[0];
+
+    if (topPositive) {
+      if (marketState === 'STRONG' || marketState === 'NEUTRAL') {
+        supporting.push(`${topPositive.pairSymbol} performance (+${topPositive.signedContribution.toFixed(2)}%) bolstered ${currency.code} relative standing.`);
+      } else {
+        conflicting.push(`${topPositive.pairSymbol} gained (+${topPositive.signedContribution.toFixed(2)}%) despite overall weak currency profile.`);
+      }
+    }
+
+    if (topNegative) {
+      if (marketState === 'WEAK' || marketState === 'NEUTRAL') {
+        supporting.push(`${topNegative.pairSymbol} performance (${topNegative.signedContribution.toFixed(2)}%) weighed on ${currency.code}.`);
+      } else {
+        conflicting.push(`${topNegative.pairSymbol} lagged (${topNegative.signedContribution.toFixed(2)}%), exerting counter-drag.`);
+      }
+    }
+  }
 
   // Central Bank stance evidence
   if (centralBank.stance === 'HAWKISH') {

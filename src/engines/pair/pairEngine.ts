@@ -20,9 +20,20 @@ export function evaluatePairIntelligence(
   date = new Date(),
   isDataFeedConnected = true
 ): PairIntelligence {
-  if (!isDataFeedConnected || baseState.overallState === 'DATA_UNAVAILABLE' || quoteState.overallState === 'DATA_UNAVAILABLE') {
+  if (
+    !isDataFeedConnected ||
+    baseState.overallState === 'DATA_UNAVAILABLE' ||
+    quoteState.overallState === 'DATA_UNAVAILABLE' ||
+    baseState.marketStrength === null ||
+    quoteState.marketStrength === null
+  ) {
     const watchWindow = calculateWatchWindow(pair, events, date, false);
     const sessionRel = getPairSessionRelevance(pair.symbol);
+
+    const isMarketMissing = baseState.marketStrength === null || quoteState.marketStrength === null;
+    const orientationExplanation = isMarketMissing
+      ? `MARKET DATA UNAVAILABLE: Live market strength feed is missing for ${baseState.marketStrength === null ? pair.baseCurrency : ''}${baseState.marketStrength === null && quoteState.marketStrength === null ? ' and ' : ''}${quoteState.marketStrength === null ? pair.quoteCurrency : ''}. Connect Twelve Data provider to calculate relative orientation.`
+      : 'DATA SOURCE NOT CONNECTED: Pair relative orientation cannot be calculated without authenticated inputs.';
 
     return {
       pair,
@@ -32,14 +43,14 @@ export function evaluatePairIntelligence(
       quoteState,
       relativeStrengthDelta: null,
       orientationDirection: 'DATA_UNAVAILABLE',
-      orientationExplanation: 'DATA SOURCE NOT CONNECTED: Pair relative orientation cannot be calculated without authenticated inputs.',
+      orientationExplanation,
       convergenceDivergence: 'DATA_UNAVAILABLE',
       convergenceExplanation: 'Convergence analysis suspended until real market and fundamental feeds are connected.',
       supportingEvidence: [],
       counterEvidence: [],
       catalysts: [],
-      risks: ['Data feed disconnected; macro monitoring inactive.'],
-      thesis: 'DATA UNAVAILABLE: Connect verified market and macro sources to generate actionable pair thesis.',
+      risks: ['Market data feed not configured or offline; pair monitoring inactive.'],
+      thesis: 'DATA UNAVAILABLE: Connect verified market provider to generate actionable pair thesis.',
       invalidationConditions: ['Awaiting data feed initialization.'],
       sessionRelevance: {
         primarySession: sessionRel.primarySession,

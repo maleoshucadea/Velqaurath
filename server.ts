@@ -82,6 +82,45 @@ app.get('/api/dashboard', (_req, res) => {
   res.json(VelqoarathApiService.getDashboard());
 });
 
+// Real Market-Data Provider Endpoints
+app.get('/api/market-data/status', (_req, res) => {
+  res.json(VelqoarathApiService.getMarketDataStatus());
+});
+
+app.get('/api/market-data/quotes', async (req, res) => {
+  try {
+    const force = req.query.force === 'true';
+    const quotes = await VelqoarathApiService.getMarketQuotes(force);
+    res.json(quotes);
+  } catch (err: unknown) {
+    res.status(500).json({ error: 'Failed to retrieve market quotes' });
+  }
+});
+
+app.get('/api/market-data/strength', async (req, res) => {
+  try {
+    const force = req.query.force === 'true';
+    const strengths = await VelqoarathApiService.getMarketStrengths(force);
+    res.json(strengths);
+  } catch (err: unknown) {
+    res.status(500).json({ error: 'Failed to compute market strengths' });
+  }
+});
+
+app.get('/api/market-data/coverage', (_req, res) => {
+  res.json(VelqoarathApiService.getMarketCoverage());
+});
+
+app.post('/api/market-data/sync', async (req, res) => {
+  try {
+    const force = req.body?.force === true;
+    const result = await VelqoarathApiService.syncMarketData(force);
+    res.json(result);
+  } catch (err: unknown) {
+    res.status(500).json({ error: 'Failed to sync market data' });
+  }
+});
+
 app.post('/api/data-feed/toggle', (req, res) => {
   const connected = req.body?.connected;
   res.json(VelqoarathApiService.toggleDataFeed(connected));
@@ -113,6 +152,10 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[VELQOARATH] Market Intelligence Server listening on port ${PORT}`);
+    // Non-blocking initialization of market data provider
+    VelqoarathApiService.syncMarketData().catch(err => {
+      console.warn('[VELQOARATH] Initial market data sync deferred:', err?.message || err);
+    });
   });
 }
 

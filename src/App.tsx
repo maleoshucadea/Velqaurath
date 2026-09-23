@@ -42,12 +42,28 @@ export default function App() {
       setAllPairs(VelqoarathApiService.getAllPairIntelligences());
     };
 
+    // Initial and periodic fetch from server to get provider updates
+    const fetchFromServer = async () => {
+      try {
+        const res = await fetch('/api/dashboard');
+        if (res.ok) {
+          const data: DashboardPayload = await res.json();
+          setDashboard(data);
+        }
+      } catch {
+        // Fallback to local service if server endpoint unreachable (e.g. testing)
+      }
+    };
+
+    fetchFromServer();
     const unsubscribe = globalStore.subscribe(updateState);
     const interval = setInterval(updateState, 5000); // 5-second cadence for session clock precision
+    const serverInterval = setInterval(fetchFromServer, 15000); // 15-second sync with server provider cache
 
     return () => {
       unsubscribe();
       clearInterval(interval);
+      clearInterval(serverInterval);
     };
   }, []);
 
@@ -116,6 +132,7 @@ export default function App() {
           dataStatus={dashboard.dataStatus}
           statusMessage={dashboard.dataStatusMessage}
           dataSources={dashboard.dataSources}
+          marketProviderStatus={dashboard.marketProviderStatus}
           onToggleConnection={handleToggleFeed}
           onOpenSources={() => setIsSourcesOpen(true)}
         />
@@ -273,6 +290,7 @@ export default function App() {
       <DataSourcesModal
         dataSources={dashboard.dataSources}
         dataStatus={dashboard.dataStatus}
+        marketProviderStatus={dashboard.marketProviderStatus}
         isOpen={isSourcesOpen}
         onClose={() => setIsSourcesOpen(false)}
         onToggleConnection={handleToggleFeed}

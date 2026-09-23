@@ -136,6 +136,18 @@ export interface RelativeStrengthBreakdown {
   momentum: number | null;
   timeframe: string;
   explanation: string;
+  source?: string;
+  coverage?: {
+    available: number;
+    required: number;
+    percent: number;
+  };
+  contributors?: Array<{
+    pairSymbol: string;
+    pairReturnPercent: number;
+    role: 'BASE' | 'QUOTE';
+    signedContribution: number;
+  }>;
 }
 
 export interface PillarAssessment {
@@ -264,4 +276,5 @@ export interface DashboardPayload {
   };
   economicCalendar: EconomicEvent[];
   dataSources: DataSource[];
+  marketProviderStatus?: import('../marketData/types').MarketProviderStatus;
 }
