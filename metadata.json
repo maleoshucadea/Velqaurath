@@ -1,0 +1,7 @@
+{
+  "name": "VELQOARATH",
+  "description": "Global Market Intelligence — Fundamental and relative currency intelligence terminal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
