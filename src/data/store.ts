@@ -269,7 +269,7 @@ export class DataStore {
 
   public getDashboard(date: Date = new Date()): DashboardPayload {
     const allStates = this.getAllCurrencyStates();
-    const providerStatus = marketDataService.getStatus();
+    const providerStatus = this.state.marketProviderStatus ?? marketDataService.getStatus();
 
     const dataStatus = this.state.isDataFeedConnected ? 'CONNECTED' : 'NOT_CONNECTED';
     const dataStatusMessage = this.state.isDataFeedConnected

@@ -41,28 +41,44 @@ export function App() {
       setPairIntelligences(globalStore.getAllPairIntelligences());
     };
 
-    const fetchServerDashboard = async () => {
+    const fetchServerData = async () => {
       try {
-        const res = await fetch('/api/dashboard');
-        if (res.ok) {
-          const data = await res.json();
-          setDashboard(data);
+        const [dashRes, pairsRes] = await Promise.all([
+          fetch('/api/dashboard'),
+          fetch('/api/pairs')
+        ]);
+
+        if (dashRes.ok) {
+          const dashData: DashboardPayload = await dashRes.json();
+          setDashboard(dashData);
+
+          if (dashData.marketProviderStatus) {
+            globalStore.setMarketData(
+              [],
+              new Map(),
+              dashData.marketProviderStatus
+            );
+          }
+        }
+
+        if (pairsRes.ok) {
+          const pairsData = await pairsRes.json();
+          setPairIntelligences(pairsData);
         }
       } catch {
-        // Fallback to local store
+        // Fallback to local store only on network failure
+        updateLocalState();
       }
     };
 
-    fetchServerDashboard();
+    fetchServerData();
 
     const unsubscribe = globalStore.subscribe(updateLocalState);
-    const storeInterval = setInterval(updateLocalState, 5000);
-    const serverInterval = setInterval(fetchServerDashboard, 15000);
+    const pollInterval = setInterval(fetchServerData, 3000);
 
     return () => {
       unsubscribe();
-      clearInterval(storeInterval);
-      clearInterval(serverInterval);
+      clearInterval(pollInterval);
     };
   }, []);
 

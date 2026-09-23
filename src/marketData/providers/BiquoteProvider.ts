@@ -89,6 +89,7 @@ export class BiquoteProvider {
   private isExplicitlyClosed: boolean = false;
   private reconnectTimer: any = null;
   private reconnectAttempts: number = 0;
+  private liveStreamPromise: Promise<void> | null = null;
 
   constructor(options: BiquoteProviderOptions = {}) {
     this.requiredPairs = options.requiredPairs ?? DEFAULT_LIQUID_PAIRS;
@@ -248,9 +249,29 @@ export class BiquoteProvider {
   }
 
   public async startLiveStream(): Promise<void> {
+    this.isExplicitlyClosed = false;
+
+    // Idempotent: If already connected or active socket is open, no-op
+    if (this.streamState === 'CONNECTED' && this.activeWs) {
+      return;
+    }
+
+    // Idempotent: If a connection attempt is in-flight, return the shared promise
+    if (this.liveStreamPromise) {
+      return this.liveStreamPromise;
+    }
+
+    this.liveStreamPromise = this.internalStartLiveStream();
+    try {
+      await this.liveStreamPromise;
+    } finally {
+      this.liveStreamPromise = null;
+    }
+  }
+
+  private async internalStartLiveStream(): Promise<void> {
     if (this.isExplicitlyClosed) return;
-    if (this.streamState === 'CONNECTED') return;
-    if (this.streamState === 'CONNECTING' && this.activeWs) return;
+    if (this.streamState === 'CONNECTED' && this.activeWs) return;
 
     this.streamState = 'CONNECTING';
     this.connectionGeneration++;
@@ -390,6 +411,9 @@ export class BiquoteProvider {
   private handleStreamDisconnect(reason: string, generation: number): void {
     if (this.isExplicitlyClosed) return;
     if (generation !== this.connectionGeneration) return;
+
+    // Advance generation immediately so stale callbacks from this socket cannot trigger duplicate disconnects
+    this.connectionGeneration++;
 
     if (this.activeWs) {
       try {
